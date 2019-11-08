@@ -17,10 +17,7 @@ jobs:
         pip3 install -U setuptools wheel
         pip3 install pyinstaller
     - name: Build Python executable
-      run: |
-        ls 
-        rm -r dist/ build/
-        python3 -O -m PyInstaller -y -F sibnet.py 
+      run: python3 -O -m PyInstaller -y -F sibnet.py 
     - name: Commit changes
       run: |        
         git config --local user.email "action@github.com"
