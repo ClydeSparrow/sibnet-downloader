@@ -1,7 +1,4 @@
-# File created using '.gitignore Generator' for Visual Studio Code: https://bit.ly/vscode-gig
-
-# Created by https://www.gitignore.io/api/macos,visualstudiocode,python
-# Edit at https://www.gitignore.io/?templates=macos,visualstudiocode,python
+*.mp4
 
 ### PyInstaller ###
 build/

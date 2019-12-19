@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: 
+    branches:
       - master
 
 jobs:
@@ -18,11 +18,11 @@ jobs:
         pip3 install pyinstaller
     - name: Build Python executable
       run: |
-        ls 
+        ls
         rm -r dist/ build/
-        python3 -O -m PyInstaller -y -F sibnet.py 
+        python3 -O -m PyInstaller -y -F main.py
     - name: Commit changes
-      run: |        
+      run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         git checkout -b release
