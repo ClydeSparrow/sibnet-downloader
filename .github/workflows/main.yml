@@ -26,8 +26,9 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         git checkout -b release
+        git status
         git add .
-        git commit -m "Build executable" -a
+        git commit -m "Build executable"
     - name: Push changes
       uses: ad-m/github-push-action@master
       with:
