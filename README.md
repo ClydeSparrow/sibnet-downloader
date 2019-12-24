@@ -10,7 +10,7 @@ Script for downloading videos from `video.sibnet.ru`
 
 ## Usage
 ```bash
-python main.py -U "https://video.sibnet.ru/video138..." -U "https://video.sibnet.ru/video140..." /path/to/target/dir
+python main.py -U https://video.sibnet.ru/video138... -U https://video.sibnet.ru/video140... /path/to/target/dir
 ```
 
 ### Command Line Arguments
@@ -22,3 +22,9 @@ required arguments:
   path                  Target directory
   -U URL, --url URL     Page URL of video
 </pre>
+
+## TODO
+- [ ] Add tests
+- [ ] Gather info from all video URLs right after start & make a list of progressbars
+- [ ] Graceful download exit (question on stop + delete file + continue with next video)
+- [ ] Playlist download
