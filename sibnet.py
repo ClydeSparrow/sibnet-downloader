@@ -14,6 +14,7 @@ UA = "Mozilla/5.0 (Linux; Android 7.1.2; AFTMM Build/NS6265; wv) AppleWebKit/537
 
 CHUNK_SIZE = 64 * 1024  # Max(!) chunk size - 64 KB
 DEFAULT_PARALLEL = 4
+TIMEOUT = 20 * 60
 
 
 def sink(path, size):
@@ -90,7 +91,7 @@ class SibnetLoader:
 
     async def _download_part(self, start, end, sink):
         i = start
-        async with self._session.get(self._file_url, headers={'Range': f'bytes={start}-{end}'}) as r:
+        async with self._session.get(self._file_url, headers={'Range': f'bytes={start}-{end}'}, timeout=TIMEOUT) as r:
             while True:
                 chunk = await r.content.read(CHUNK_SIZE)
                 if not chunk:
@@ -186,6 +187,8 @@ async def main():
     args = init()
     for url in args.url:
         result = await proceed_video(url, path=args.path)
+        # Предзагрузить детали по следующему файлу в списке
+        # Потребуется создание новго лоадера
 
 if __name__ == "__main__":
     with closing(asyncio.get_event_loop()) as loop:

@@ -24,7 +24,7 @@ required arguments:
 </pre>
 
 ## TODO
-- [ ] Add tests
-- [ ] Gather info from all video URLs right after start & make a list of progressbars
+- [ ] Catch exception on errors in threads
+- [ ] Preload info about next videos
 - [ ] Graceful download exit (question on stop + delete file + continue with next video)
 - [ ] Playlist download
