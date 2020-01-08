@@ -23,6 +23,11 @@ required arguments:
   -U URL, --url URL     Page URL of video
 </pre>
 
+## Changelog (dev - delete before commit)
+  - Вынес создание сессии наверх. Теперь все файлы загружаются в рамках одной и той же
+    - У сессий нет таймаута, поэтому почему бы и нет?
+    - [ ] Проверить есть ли разница в скоросте загрузки между ветками master и dev
+
 ## TODO
 - [ ] Catch exception on errors in threads
 - [ ] Preload info about next videos

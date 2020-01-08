@@ -14,7 +14,7 @@ SIZE_1 = 10923870
 URL_2 = "https://video.sibnet.ru/video1618755-Belaya_korobka_Shirobako__6___subtitryi_/"
 TITLE_2 = "Белая коробка/Shirobako (6) (субтитры)"
 
-_DIR = '/tmp/'
+TMP_DIR = '/tmp/'
 
 def async_test(f):
     def wrapper(*args, **kwargs):
@@ -37,16 +37,18 @@ class TestLoader(unittest.TestCase):
         async with aiohttp.ClientSession(headers={'User-Agent': UA}) as session:
             l = SibnetLoader(URL_2, session=session)
             l._title, l._ext = TITLE_2, '.mp4'
-            l._size = 1
+            l._size = 2 ** 10
 
-            l.create_file(_DIR)
+            l.create_file(TMP_DIR)
             # Check that video title in class haven't changed
             self.assertEqual(l.title, TITLE_2)
 
-            # Check file exists
-            self.assertTrue(os.path.isfile(os.path.join(_DIR, l.filepath)))
+            p = os.path.join(TMP_DIR, l.filepath)
+            # Check file exists & file size
+            self.assertTrue(os.path.isfile(p))
+            self.assertEqual(l.size, os.stat(p).st_size)
             # Delete file
-            os.remove(os.path.join(_DIR, l.filepath))
+            os.remove(p)
 
     @async_test
     async def test_video_details(self):
