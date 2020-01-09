@@ -16,7 +16,7 @@ DEFAULT_PARALLEL = 4
 TIMEOUT = 20 * 60
 
 
-def sink(path, size):
+def file_sink(path, size):
     """Writes data from download generators to file with
     tracking of process using progressbar
 
@@ -25,7 +25,7 @@ def sink(path, size):
         size {int} -- Size of video file
     """
     title = path.split('/')[-1]
-    pb = tqdm(desc=title, total=size, unit='B', unit_scale=True)
+    pbar = tqdm(desc=title, total=size, unit='B', unit_scale=True)
 
     with open(path, 'r+b') as f:
         while True:
@@ -35,9 +35,9 @@ def sink(path, size):
 
             f.seek(chunk[0], os.SEEK_SET)
             f.write(chunk[1])
-            pb.update(len(chunk[1]))
+            pbar.update(len(chunk[1]))
 
-    pb.close()
+    pbar.close()
 
 
 class SibnetLoader:
@@ -109,7 +109,7 @@ class SibnetLoader:
 
     async def download(self, path):
         download_futures = []
-        fsink = sink(os.path.join(path, self.filepath), self._size)
+        fsink = file_sink(os.path.join(path, self.filepath), self._size)
         next(fsink)  # Starting generator. After next() we can send values
 
         p_size = self._size // DEFAULT_PARALLEL
@@ -164,9 +164,7 @@ async def proceed_video(loader: SibnetLoader, path) -> bool:
         loader {SibnetLoader} -- prepared loader with initialized URL
         path {srt} -- Destination where file will be written
     """
-    await loader.get_video_info()
     loader.create_file(path)
-
     result = await loader.download(path)
     return result
 
@@ -184,10 +182,20 @@ async def main():
     args = init()
 
     async with aiohttp.ClientSession(headers={'User-Agent': UA}) as session:
-        for url in args.url:
-            # TODO: Create tasks for each url to gather video's details
-            loader = SibnetLoader(url, session)
-            await proceed_video(loader, path=args.path)
+        loaders = [SibnetLoader(url, session) for url in args.url]
+
+        await loaders[0].get_video_info()
+
+        for i in range(len(args.url)-1):
+            loader = loaders[i]
+            next_loader = loaders[i+1]
+
+            await asyncio.wait([
+                proceed_video(loader, path=args.path),
+                next_loader.get_video_info(),
+            ])
+
+        await proceed_video(loader, path=args.path)
 
 if __name__ == "__main__":
     with closing(asyncio.get_event_loop()) as loop:
