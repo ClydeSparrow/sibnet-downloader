@@ -133,7 +133,7 @@ class SibnetLoader:
 
         disk = os.statvfs(path)
         if self._size > disk.f_bavail * disk.f_frsize:
-            raise Exception(
+            raise MemoryError(
                 f"Not enough space on disk for file. {self._size // 2**10} KB required")
 
         with open(os.path.join(path, self.filepath), 'w+b') as f:
@@ -157,16 +157,21 @@ class SibnetLoader:
         return self._size
 
 
-async def proceed_video(loader: SibnetLoader, path) -> bool:
+async def proceed_video(loader: SibnetLoader, path):
     """Downloads video and saves file at specified path
 
     Arguments:
         loader {SibnetLoader} -- prepared loader with initialized URL
         path {srt} -- Destination where file will be written
     """
-    loader.create_file(path)
-    result = await loader.download(path)
-    return result
+    try:
+        loader.create_file(path)
+        await loader.download(path)
+    except MemoryError as e:
+        print(str(e))
+    except Exception as e:
+        os.remove(os.path.join(path, loader.filepath))
+        print(f"{e}. File was deleted")
 
 
 def init() -> argparse.Namespace:
@@ -195,7 +200,7 @@ async def main():
                 next_loader.get_video_info(),
             ])
 
-        await proceed_video(loader, path=args.path)
+        await proceed_video(next_loader, path=args.path)
 
 if __name__ == "__main__":
     with closing(asyncio.get_event_loop()) as loop:

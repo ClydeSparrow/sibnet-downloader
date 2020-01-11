@@ -3,8 +3,6 @@ import os
 import asyncio
 import aiohttp
 
-from contextlib import closing
-
 from sibnet import SibnetLoader, UA
 
 URL_1 = "https://video.sibnet.ru/video2057122?utm_source=player&utm_medium=video&utm_campaign=EMBED"
@@ -27,10 +25,12 @@ def async_test(f):
 class TestLoader(unittest.TestCase):
 
     @async_test
-    def test_loader_init_without_session(self):
+    async def test_loader_init_without_session(self):
+        """[summary]
+        """
         l = SibnetLoader("aaa")
         self.assertIsNone(l.title)
-        yield from l._session.close()
+        await l._session.close()
 
     @async_test
     async def test_create_file_with_special_chars(self):
