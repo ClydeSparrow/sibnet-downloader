@@ -1,13 +1,12 @@
-import asyncio
-import aiohttp
 import argparse
-import re
+import asyncio
 import os
-
+import re
 from contextlib import closing
 from typing import Union
-from tqdm import tqdm
 
+import aiohttp
+from tqdm import tqdm
 
 HOST = "https://video.sibnet.ru"
 UA = "Mozilla/5.0 (Linux; Android 7.1.2; AFTMM Build/NS6265; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/70.0.3538.110 Mobile Safari/537.36"
@@ -17,7 +16,7 @@ DEFAULT_PARALLEL = 4
 TIMEOUT = 20 * 60
 
 
-def sink(path, size):
+def file_sink(path, size):
     """Writes data from download generators to file with
     tracking of process using progressbar
 
@@ -26,7 +25,7 @@ def sink(path, size):
         size {int} -- Size of video file
     """
     title = path.split('/')[-1]
-    pb = tqdm(desc=title, total=size, unit='B', unit_scale=True)
+    pbar = tqdm(desc=title, total=size, unit='B', unit_scale=True)
 
     with open(path, 'r+b') as f:
         while True:
@@ -36,9 +35,9 @@ def sink(path, size):
 
             f.seek(chunk[0], os.SEEK_SET)
             f.write(chunk[1])
-            pb.update(len(chunk[1]))
+            pbar.update(len(chunk[1]))
 
-    pb.close()
+    pbar.close()
 
 
 class SibnetLoader:
@@ -52,10 +51,16 @@ class SibnetLoader:
         if session is None:
             self._session = aiohttp.ClientSession()
 
-        self.reset()
-        self._player_url = url
+        self._player_url = url  # URL where video player is located
+        self._file_url = None
+        self._size = None
+
+        self._title = None
+        self._ext = None
 
     async def get_video_info(self):
+        """Gets video's title, size and other information
+        """
         async with self._session.get(self._player_url) as r:
             s = await r.text()
 
@@ -76,18 +81,18 @@ class SibnetLoader:
             int -- Video file size
         """
         url = self._file_url
-        while True:
+        while self._size is None:
             async with self._session.head(url, headers={'Referer': self._player_url}) as r:
                 if r.status == 200:
                     self._file_url = url
                     self._size = int(r.headers['Content-Length'])
-                    return self._size
                 elif r.status == 302:
                     url = r.headers.get('Location')
                     if url.startswith('//'):
                         url = 'http:' + url
                 else:
                     r.raise_for_status()
+        return self._size
 
     async def _download_part(self, start, end, sink):
         i = start
@@ -104,7 +109,7 @@ class SibnetLoader:
 
     async def download(self, path):
         download_futures = []
-        fsink = sink(os.path.join(path, self.filepath), self._size)
+        fsink = file_sink(os.path.join(path, self.filepath), self._size)
         next(fsink)  # Starting generator. After next() we can send values
 
         p_size = self._size // DEFAULT_PARALLEL
@@ -118,7 +123,7 @@ class SibnetLoader:
                 self._download_part(start, end, sink=fsink))
 
         for download_future in asyncio.as_completed(download_futures):
-            result = await download_future
+            await download_future
 
         return True
 
@@ -128,7 +133,7 @@ class SibnetLoader:
 
         disk = os.statvfs(path)
         if self._size > disk.f_bavail * disk.f_frsize:
-            raise Exception(
+            raise MemoryError(
                 f"Not enough space on disk for file. {self._size // 2**10} KB required")
 
         with open(os.path.join(path, self.filepath), 'w+b') as f:
@@ -151,27 +156,22 @@ class SibnetLoader:
     def size(self) -> Union[None, int]:
         return self._size
 
-    def reset(self):
-        self._player_url = None  # URL where video player is located
-        self._title = None
-        self._ext = None
-        self._file_url = None
-        self._size = None
 
-
-async def proceed_video(url, path):
-    """Downloads video from URL and saves file at specified path
+async def proceed_video(loader: SibnetLoader, path):
+    """Downloads video and saves file at specified path
 
     Arguments:
-        url {str} -- URL page with video player
+        loader {SibnetLoader} -- prepared loader with initialized URL
         path {srt} -- Destination where file will be written
     """
-    async with aiohttp.ClientSession(headers={'User-Agent': UA}) as session:
-        loader = SibnetLoader(url, session)
-        await loader.get_video_info()
-
+    try:
         loader.create_file(path)
-        result = await loader.download(path)
+        await loader.download(path)
+    except MemoryError as e:
+        print(str(e))
+    except Exception as e:
+        os.remove(os.path.join(path, loader.filepath))
+        print(f"{e}. File was deleted")
 
 
 def init() -> argparse.Namespace:
@@ -185,10 +185,22 @@ def init() -> argparse.Namespace:
 
 async def main():
     args = init()
-    for url in args.url:
-        result = await proceed_video(url, path=args.path)
-        # Предзагрузить детали по следующему файлу в списке
-        # Потребуется создание новго лоадера
+
+    async with aiohttp.ClientSession(headers={'User-Agent': UA}) as session:
+        loaders = [SibnetLoader(url, session) for url in args.url]
+
+        await loaders[0].get_video_info()
+
+        for i in range(len(args.url)-1):
+            loader = loaders[i]
+            next_loader = loaders[i+1]
+
+            await asyncio.wait([
+                proceed_video(loader, path=args.path),
+                next_loader.get_video_info(),
+            ])
+
+        await proceed_video(next_loader, path=args.path)
 
 if __name__ == "__main__":
     with closing(asyncio.get_event_loop()) as loop:

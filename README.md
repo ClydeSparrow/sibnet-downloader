@@ -25,6 +25,6 @@ required arguments:
 
 ## TODO
 - [ ] Catch exception on errors in threads
-- [ ] Preload info about next videos
+- [x] Preload info about next videos
 - [ ] Graceful download exit (question on stop + delete file + continue with next video)
 - [ ] Playlist download
