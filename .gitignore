@@ -138,6 +138,9 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
+### PyCharm ###
+.idea/
+
 ### VisualStudioCode ###
 .vscode
 !.vscode/settings.json

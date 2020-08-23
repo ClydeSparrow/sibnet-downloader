@@ -1,22 +1,20 @@
-import argparse
 import asyncio
 import os
 import re
-from contextlib import closing
+
 from typing import Union
 
 import aiohttp
+import click
+
 from tqdm import tqdm
 
-HOST = "https://video.sibnet.ru"
-UA = "Mozilla/5.0 (Linux; Android 7.1.2; AFTMM Build/NS6265; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/70.0.3538.110 Mobile Safari/537.36"
+import settings
 
-CHUNK_SIZE = 64 * 1024  # Max(!) chunk size - 64 KB
-DEFAULT_PARALLEL = 4
-TIMEOUT = 20 * 60
+from utils import coroutine
 
 
-def file_sink(path, size):
+def file_sink(path, size, **kwargs):
     """Writes data from download generators to file with
     tracking of process using progressbar
 
@@ -29,7 +27,7 @@ def file_sink(path, size):
 
     with open(path, 'r+b') as f:
         while True:
-            chunk: tuple = yield
+            chunk = yield
             if not chunk:
                 break
 
@@ -59,8 +57,7 @@ class SibnetLoader:
         self._ext = None
 
     async def get_video_info(self):
-        """Gets video's title, size and other information
-        """
+        """Get video title, size and other information"""
         async with self._session.get(self._player_url) as r:
             s = await r.text()
 
@@ -68,7 +65,7 @@ class SibnetLoader:
             self._title = p.group(1)
 
             p = next(re.finditer(self.URL_REGEX, s), None)
-            self._file_url = HOST + p.group(0)
+            self._file_url = settings.HOST + p.group(0)
 
         # Redirect to final video URL & update loader fields
         await self.get_video_size()
@@ -96,9 +93,9 @@ class SibnetLoader:
 
     async def _download_part(self, start, end, sink):
         i = start
-        async with self._session.get(self._file_url, headers={'Range': f'bytes={start}-{end}'}, timeout=TIMEOUT) as r:
+        async with self._session.get(self._file_url, headers={'Range': f'bytes={start}-{end}'}, timeout=settings.TIMEOUT) as r:
             while True:
-                chunk = await r.content.read(CHUNK_SIZE)
+                chunk = await r.content.read(settings.MAX_CHUNK_SIZE)
                 if not chunk:
                     break
 
@@ -109,18 +106,15 @@ class SibnetLoader:
 
     async def download(self, path):
         download_futures = []
-        fsink = file_sink(os.path.join(path, self.filepath), self._size)
+        fsink = file_sink(path=os.path.join(path, self.filepath), size=self._size)
         next(fsink)  # Starting generator. After next() we can send values
 
-        p_size = self._size // DEFAULT_PARALLEL
-        for i in range(DEFAULT_PARALLEL):
+        p_size = self._size // settings.HANDLERS
+        for i in range(settings.HANDLERS):
             start = i * p_size
-            end = (i+1) * p_size - 1
-            if i == DEFAULT_PARALLEL - 1:
-                end = ''
+            end = min(self.size, (i+1) * p_size - 1)
 
-            download_futures.append(
-                self._download_part(start, end, sink=fsink))
+            download_futures.append(self._download_part(start, end, sink=fsink))
 
         for download_future in asyncio.as_completed(download_futures):
             await download_future
@@ -174,34 +168,25 @@ async def proceed_video(loader: SibnetLoader, path):
         print(f"{e}. File was deleted")
 
 
-def init() -> argparse.Namespace:
-    """Parses console args on script start"""
-    parser = argparse.ArgumentParser(description='Video Downloader')
-    parser.add_argument('path', metavar='path', help='Target directory')
-    parser.add_argument('-U', '--url', action='append',
-                        help='Page URL of video', required=True)
-    return parser.parse_args()
-
-
-async def main():
-    args = init()
-
-    async with aiohttp.ClientSession(headers={'User-Agent': UA}) as session:
-        loaders = [SibnetLoader(url, session) for url in args.url]
+@click.command()
+@click.option('-U', '--url', multiple=True, help='Page URL of video')
+@click.argument('path', type=click.Path(exists=True))
+@coroutine
+async def main(url, path):
+    """Script to download videos from video.sibnet.ru"""
+    async with aiohttp.ClientSession(headers={'User-Agent': settings.UA}) as session:
+        loaders = [SibnetLoader(url, session) for url in url]
 
         await loaders[0].get_video_info()
 
-        for i in range(len(args.url)-1):
-            loader = loaders[i]
-            next_loader = loaders[i+1]
-
+        for loader, next_loader in zip(loaders, loaders[1:]):
             await asyncio.wait([
-                proceed_video(loader, path=args.path),
-                next_loader.get_video_info(),
+                proceed_video(loader, path=path),
+                next_loader.get_video_info()
             ])
 
-        await proceed_video(next_loader, path=args.path)
+        await proceed_video(loaders[-1], path=path)
 
-if __name__ == "__main__":
-    with closing(asyncio.get_event_loop()) as loop:
-        loop.run_until_complete(main())
+
+if __name__ == '__main__':
+    main()
