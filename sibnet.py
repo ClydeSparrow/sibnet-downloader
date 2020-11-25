@@ -1,17 +1,37 @@
 import asyncio
+import json
 import os
 import re
-
-from typing import Union
+from typing import List
 
 import aiohttp
 import click
-
 from tqdm import tqdm
 
 import settings
-
 from utils import coroutine
+
+
+class VideoFile:
+    __slots__ = ['page_url', 'file_url', 'title', 'size', 'prepared']
+
+    def __init__(self, page_url=None):
+        self.page_url = page_url
+        self.file_url = None
+        self.title = None
+        self.size = None
+        self.prepared = False
+
+    def __repr__(self):
+        return json.dumps(self.__dict__, indent=4)
+
+    @property
+    def ext(self):
+        return next(re.finditer(SibnetLoader.EXT_REGEX, self.file_url)).group(1)
+
+    @property
+    def filename(self):
+        return self.title + self.ext
 
 
 def file_sink(path, size, **kwargs):
@@ -44,56 +64,53 @@ class SibnetLoader:
     URL_REGEX = r"\/v\/.+\d+.mp4"
     EXT_REGEX = r"\d+(\.\w+)\?"
 
-    def __init__(self, url, session: Union[None, aiohttp.ClientSession] = None):
-        self._session = session
-        if session is None:
-            self._session = aiohttp.ClientSession()
+    def __init__(self, save_to='.', session=None):
+        self._session = session or aiohttp.ClientSession()
+        self._filepath = save_to
 
-        self._player_url = url  # URL where video player is located
-        self._file_url = None
-        self._size = None
-
-        self._title = None
-        self._ext = None
-
-    async def get_video_info(self):
-        """Get video title, size and other information"""
-        async with self._session.get(self._player_url) as r:
+    async def prepare(self, videofile: VideoFile):
+        """Enrich VideoFile object with data parsed from video page"""
+        # Parse title and link to video from page
+        async with self._session.get(videofile.page_url) as r:
             s = await r.text()
 
             p = next(re.finditer(self.TITLE_REGEX, s), None)
-            self._title = p.group(1)
+            videofile.title = p.group(1)
 
             p = next(re.finditer(self.URL_REGEX, s), None)
-            self._file_url = settings.HOST + p.group(0)
+            videofile.file_url = settings.HOST + p.group(0)
 
-        # Redirect to final video URL & update loader fields
-        await self.get_video_size()
-        self._ext = next(re.finditer(self.EXT_REGEX, self._file_url)).group(1)
-
-    async def get_video_size(self) -> int:
-        """Redirects to final video's location and returns size from Content-Length
-
-        Returns:
-            int -- Video file size
-        """
-        url = self._file_url
-        while self._size is None:
-            async with self._session.head(url, headers={'Referer': self._player_url}) as r:
+        # Redirect to final video URL
+        url = videofile.file_url
+        while videofile.size is None:
+            async with self._session.head(url, headers={'Referer': videofile.page_url}) as r:
                 if r.status == 200:
-                    self._file_url = url
-                    self._size = int(r.headers['Content-Length'])
+                    videofile.file_url = url
+                    videofile.size = int(r.headers['Content-Length'])
                 elif r.status == 302:
                     url = r.headers.get('Location')
                     if url.startswith('//'):
                         url = 'http:' + url
                 else:
                     r.raise_for_status()
-        return self._size
 
-    async def _download_part(self, start, end, sink):
+        videofile.prepared = True
+        return videofile.size
+
+    async def proceed_video(self, video):
+        """Downloads video and saves file at specified path"""
+        try:
+            self.create_file(video.filename, video.size)
+            await self.download(video)
+        except MemoryError as e:
+            print(f'"{video.title}" can\'t be proceeded: {e}')
+        except Exception as e:
+            os.remove(os.path.join(self._filepath, video.filename))
+            print(f"{e}. File was deleted")
+
+    async def _download_part(self, url, start, end, sink):
         i = start
-        async with self._session.get(self._file_url, headers={'Range': f'bytes={start}-{end}'}, timeout=settings.TIMEOUT) as r:
+        async with self._session.get(url, headers={'Range': f'bytes={start}-{end}'}, timeout=settings.TIMEOUT) as r:
             while True:
                 chunk = await r.content.read(settings.MAX_CHUNK_SIZE)
                 if not chunk:
@@ -104,68 +121,47 @@ class SibnetLoader:
 
         return i - start
 
-    async def download(self, path):
+    async def download(self, video: VideoFile):
         download_futures = []
-        fsink = file_sink(path=os.path.join(path, self.filepath), size=self._size)
-        next(fsink)  # Starting generator. After next() we can send values
+        fsink = file_sink(path=os.path.join(self._filepath, video.filename), size=video.size)
+        next(fsink)  # Starting generator. Only after next() it will accept values
 
-        p_size = self._size // settings.HANDLERS
+        p_size = video.size // settings.HANDLERS
         for i in range(settings.HANDLERS):
             start = i * p_size
-            end = min(self.size, (i+1) * p_size - 1)
+            end = min(video.size, (i+1) * p_size - 1)
 
-            download_futures.append(self._download_part(start, end, sink=fsink))
+            download_futures.append(self._download_part(video.file_url, start, end, sink=fsink))
 
         for download_future in asyncio.as_completed(download_futures):
             await download_future
 
         return True
 
-    def create_file(self, path):
-        if self.size is None:
-            raise Exception("File size is unknown. Do get_video_info() first")
+    def create_file(self, filename, size):
+        path = os.path.join(self._filepath, filename)
 
-        disk = os.statvfs(path)
-        if self._size > disk.f_bavail * disk.f_frsize:
-            raise MemoryError(
-                f"Not enough space on disk for file. {self._size // 2**10} KB required")
+        disk = os.statvfs(self._filepath)
+        if size > disk.f_bavail * disk.f_frsize:
+            raise MemoryError(f"Not enough space on disk for file. {self // 2**10} KB required")
 
-        with open(os.path.join(path, self.filepath), 'w+b') as f:
-            f.seek(self._size-1)
+        with open(path, 'w+b') as f:
+            f.seek(size-1)
             f.write(b'\0')
 
-    @property
-    def title(self) -> Union[None, str]:
-        return self._title
 
-    @property
-    def fileurl(self) -> Union[None, str]:
-        return self._file_url
-
-    @property
-    def filepath(self) -> str:
-        return self._title.replace('/', ' - ') + self._ext
-
-    @property
-    def size(self) -> Union[None, int]:
-        return self._size
+async def prepare_all_videos(loader: SibnetLoader, videos: List[VideoFile]):
+    for video in videos:
+        await loader.prepare(video)
 
 
-async def proceed_video(loader: SibnetLoader, path):
-    """Downloads video and saves file at specified path
+async def proceed_all_videos(loader: SibnetLoader, videos: List[VideoFile]):
+    for video in videos:
+        # Wait until video's page is parsed
+        while not video.prepared:
+            await asyncio.sleep(.5)
 
-    Arguments:
-        loader {SibnetLoader} -- prepared loader with initialized URL
-        path {srt} -- Destination where file will be written
-    """
-    try:
-        loader.create_file(path)
-        await loader.download(path)
-    except MemoryError as e:
-        print(str(e))
-    except Exception as e:
-        os.remove(os.path.join(path, loader.filepath))
-        print(f"{e}. File was deleted")
+        await loader.proceed_video(video)
 
 
 @click.command()
@@ -174,18 +170,14 @@ async def proceed_video(loader: SibnetLoader, path):
 @coroutine
 async def main(url, path):
     """Script to download videos from video.sibnet.ru"""
+    videos = [VideoFile(page_url=url) for url in url]
     async with aiohttp.ClientSession(headers={'User-Agent': settings.UA}) as session:
-        loaders = [SibnetLoader(url, session) for url in url]
+        loader = SibnetLoader(session=session, save_to=path)
 
-        await loaders[0].get_video_info()
-
-        for loader, next_loader in zip(loaders, loaders[1:]):
-            await asyncio.wait([
-                proceed_video(loader, path=path),
-                next_loader.get_video_info()
-            ])
-
-        await proceed_video(loaders[-1], path=path)
+        await asyncio.wait([
+            prepare_all_videos(loader, videos),
+            proceed_all_videos(loader, videos),
+        ])
 
 
 if __name__ == '__main__':
