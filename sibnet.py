@@ -1,37 +1,19 @@
 import asyncio
-import json
 import os
 import re
-from typing import List
 
-import aiohttp
-import click
 from tqdm import tqdm
 
 import settings
-from utils import coroutine
+from common import VideoFile, Loader
+
+UA = "Mozilla/5.0 (Linux; Android 7.1.2; AFTMM Build/NS6265; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/70.0.3538.110 Mobile Safari/537.36"
 
 
-class VideoFile:
-    __slots__ = ['page_url', 'file_url', 'title', 'size', 'prepared']
-
-    def __init__(self, page_url=None):
-        self.page_url = page_url
-        self.file_url = None
-        self.title = None
-        self.size = None
-        self.prepared = False
-
-    def __repr__(self):
-        return json.dumps(self.__dict__, indent=4)
-
+class SibnetVideo(VideoFile):
     @property
     def ext(self):
         return next(re.finditer(SibnetLoader.EXT_REGEX, self.file_url)).group(1)
-
-    @property
-    def filename(self):
-        return self.title + self.ext
 
 
 def file_sink(path, size, **kwargs):
@@ -58,15 +40,14 @@ def file_sink(path, size, **kwargs):
     pbar.close()
 
 
-class SibnetLoader:
+class SibnetLoader(Loader):
+
+    HOST = 'video.sibnet.ru'
+    HEADERS = {'User-Agent': UA}
 
     TITLE_REGEX = r"videoName\'>(.*)<\/h1>"
     URL_REGEX = r"\/v\/.+\d+.mp4"
     EXT_REGEX = r"\d+(\.\w+)\?"
-
-    def __init__(self, save_to='.', session=None):
-        self._session = session or aiohttp.ClientSession()
-        self._filepath = save_to
 
     async def prepare(self, videofile: VideoFile):
         """Enrich VideoFile object with data parsed from video page"""
@@ -78,7 +59,7 @@ class SibnetLoader:
             videofile.title = p.group(1)
 
             p = next(re.finditer(self.URL_REGEX, s), None)
-            videofile.file_url = settings.HOST + p.group(0)
+            videofile.file_url = self.HOST + p.group(0)
 
         # Redirect to final video URL
         url = videofile.file_url
@@ -148,37 +129,3 @@ class SibnetLoader:
         with open(path, 'w+b') as f:
             f.seek(size-1)
             f.write(b'\0')
-
-
-async def prepare_all_videos(loader: SibnetLoader, videos: List[VideoFile]):
-    for video in videos:
-        await loader.prepare(video)
-
-
-async def proceed_all_videos(loader: SibnetLoader, videos: List[VideoFile]):
-    for video in videos:
-        # Wait until video's page is parsed
-        while not video.prepared:
-            await asyncio.sleep(.5)
-
-        await loader.proceed_video(video)
-
-
-@click.command()
-@click.option('-U', '--url', multiple=True, help='Page URL of video')
-@click.argument('path', type=click.Path(exists=True))
-@coroutine
-async def main(url, path):
-    """Script to download videos from video.sibnet.ru"""
-    videos = [VideoFile(page_url=url) for url in url]
-    async with aiohttp.ClientSession(headers={'User-Agent': settings.UA}) as session:
-        loader = SibnetLoader(session=session, save_to=path)
-
-        await asyncio.wait([
-            prepare_all_videos(loader, videos),
-            proceed_all_videos(loader, videos),
-        ])
-
-
-if __name__ == '__main__':
-    main()
